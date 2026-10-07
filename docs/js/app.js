@@ -83,12 +83,30 @@ function fillSettingsForm() {
 
 $("settingsBtn").addEventListener("click", () => { fillSettingsForm(); $("settingsDlg").showModal(); });
 
-$("saveSettings").addEventListener("click", () => {
+// 설정은 고치는 즉시 저장한다. 예전에는 [저장]을 눌러야만 남아서, [닫기]나 Esc 로 닫으면
+// 키와 블로그 주소가 날아가 다음에 켤 때 다시 넣어야 했다.
+function saveSettingsForm() {
   const patch = {};
   for (const [id, key] of Object.entries(SETTING_FIELDS)) patch[key] = $(id).value.trim();
-  settings = store.save(patch);
-  say($("topStatus"), "설정을 저장했습니다.", "ok");
+  try {
+    settings = store.save(patch);
+    return true;
+  } catch (_) {
+    // 사생활 보호 모드 등에서 저장소가 막힌 경우. 조용히 넘어가면 "왜 또 물어보지?"가 된다.
+    say($("settingsStatus"), "이 브라우저에서는 저장이 막혀 있습니다. 시크릿 창이 아닌 일반 창에서 열어 주세요.", "err");
+    return false;
+  }
+}
+
+for (const id of Object.keys(SETTING_FIELDS)) $(id).addEventListener("input", saveSettingsForm);
+$("settingsDlg").addEventListener("close", saveSettingsForm);
+
+$("saveSettings").addEventListener("click", () => {
+  if (saveSettingsForm()) say($("topStatus"), "설정을 저장했습니다.", "ok");
 });
+
+// 브라우저가 저장 공간이 모자랄 때 이 사이트 데이터를 지우지 않게 부탁해 둔다.
+navigator.storage?.persist?.().catch(() => {});
 
 $("testGemini").addEventListener("click", async () => {
   const btn = $("testGemini");
