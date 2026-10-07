@@ -13,6 +13,7 @@ import { mdToHtml, splitTitle, esc, escAttr } from "./markdown.js";
 import * as gemini from "./gemini.js";
 import * as buttons from "./buttons.js";
 import * as checks from "./checks.js";
+import * as history from "./history.js";
 import { markBlanks, unmarkBlanks } from "./editor.js";
 
 const $ = (id) => document.getElementById(id);
@@ -141,7 +142,12 @@ $("genText").addEventListener("click", async () => {
   const keyword = $("kw").value.trim();
   if (!keyword) return say($("textStatus"), "무엇에 대해 쓸지 먼저 적어 주세요.", "warn");
   if (!settings.geminiKey) return say($("textStatus"), "먼저 [설정]에서 Gemini 키를 넣어 주세요.", "err");
-  if (bodyEl().textContent.trim() && !confirm("지금 쓰고 있는 글을 새로 만든 글로 바꿉니다. 계속할까요?")) return;
+  if (bodyEl().textContent.trim() &&
+      !confirm("지금 쓰고 있는 글을 새로 만든 글로 바꿉니다. 쓰던 글은 [지난 글]에 보관됩니다. 계속할까요?")) return;
+  // 새로 만든 글은 따로 보관한다. 쓰던 글을 먼저 넣어 두고 연결을 끊어야
+  // 아래 setBody 가 지난 글을 덮어쓰지 않는다.
+  archiveNow();
+  currentId = null;
 
   busy(btn, true, "만드는 중…");
   say($("textStatus"), "만드는 중… 30초쯤 걸립니다.", "loading");
@@ -543,14 +549,114 @@ function saveDraft() {
     // 빈 상태는 저장하지 않는다. 저장하면 앱을 새 탭에서 열자마자
     // 다른 탭에서 쓰던 글이 빈 값으로 덮여 사라진다. 비우는 것은 [새로 쓰기] 로만.
     if (!title && !bodyEl().textContent.trim()) return;
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ title, body, at: Date.now() })); } catch (_) {}
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ title, body, at: Date.now(), id: currentId }));
+    } catch (_) {}
+    // 쓰던 글은 보관함에도 같이 넣어 둔다. currentId 가 있으므로 같은 항목이 갱신된다.
+    archiveNow();
   }, 500);
 }
+
+// ── 지난 글 보관함 ──
+// 글은 "지금 쓰는 글" 하나와 "보관된 지난 글" 여러 개로 나뉜다.
+// currentId 가 지금 쓰는 글이 보관함에서 어느 항목인지 가리킨다.
+// 이게 없으면 자동 저장이 돌 때마다 같은 글이 새 항목으로 쌓인다.
+let currentId = null;
+let histList = [];
+
+function archiveNow() {
+  // 본문은 칠(mark)을 벗겨서 보관한다. 안 벗기면 형광펜이 그어진 채로 되살아난다.
+  const title = $("postTitle").value;
+  const body = getBody();
+  if (!history.worthSaving({ title, body })) return;
+  const { list, entry } = history.saveEntry({ id: currentId, title, body });
+  if (entry) {
+    currentId = entry.id;
+    histList = list;
+    renderHistory();
+  }
+}
+
+function renderHistory() {
+  const ul = $("histList");
+  const n = histList.length;
+  $("histCount").textContent = n ? `${n}개` : "";
+  $("histClear").classList.toggle("hidden", n === 0);
+
+  if (!n) {
+    ul.innerHTML = `<li><span class="empty">아직 보관된 글이 없습니다.</span></li>`;
+    return;
+  }
+
+  const now = Date.now();
+  ul.innerHTML = histList
+    .map((e) => {
+      const when = history.formatWhen(e.at, now);
+      const mine = e.id === currentId ? " current" : "";
+      const tag = e.id === currentId ? " · 지금 쓰는 글" : "";
+      return `<li class="hist-item${mine}" data-id="${escAttr(e.id)}">
+        <button type="button" class="pick" title="이 글을 불러옵니다">
+          <span class="t">${esc(e.label)}</span>
+          ${e.snippet ? `<span class="s">${esc(e.snippet)}</span>` : ""}
+          <span class="m">${esc(when)} · ${e.chars.toLocaleString()}자${tag}</span>
+        </button>
+        <button type="button" class="del" title="이 글을 보관함에서 지웁니다">✕</button>
+      </li>`;
+    })
+    .join("");
+}
+
+function loadFromHistory(id) {
+  const e = history.find(histList, id);
+  if (!e) return;
+  if (e.id === currentId) return say($("topStatus"), "지금 보고 있는 글입니다.", "warn");
+
+  // 지금 쓰던 글을 먼저 보관한다. 안 그러면 불러오는 순간 사라진다.
+  archiveNow();
+
+  currentId = e.id;
+  $("postTitle").value = e.title || "";
+  setBody(e.body || "");
+  $("checkList").innerHTML = "";
+  renderHistory();
+  say($("topStatus"), `"${e.label}" 을 불러왔습니다.`, "ok");
+}
+
+$("histList").addEventListener("click", (ev) => {
+  const li = ev.target.closest(".hist-item");
+  if (!li) return;
+  const id = li.dataset.id;
+
+  if (ev.target.closest(".del")) {
+    const e = history.find(histList, id);
+    if (e && !confirm(`"${e.label}" 을 보관함에서 지웁니다. 계속할까요?`)) return;
+    histList = history.removeEntry(id);
+    // 지금 쓰는 글을 지웠으면 화면의 글은 그대로 두고 연결만 끊는다.
+    // 글이 눈앞에서 사라지면 사용자는 쓰던 내용을 잃었다고 생각한다.
+    if (id === currentId) currentId = null;
+    renderHistory();
+    say($("topStatus"), "보관함에서 지웠습니다.", "ok");
+    return;
+  }
+
+  if (ev.target.closest(".pick")) loadFromHistory(id);
+});
+
+$("histClear").addEventListener("click", () => {
+  if (!confirm(`보관된 글 ${histList.length}개를 모두 지웁니다. 되돌릴 수 없습니다. 계속할까요?`)) return;
+  history.clearAll();
+  histList = [];
+  currentId = null;
+  renderHistory();
+  say($("topStatus"), "보관함을 비웠습니다. 화면의 글은 그대로 있습니다.", "ok");
+});
 
 function restoreDraft() {
   try {
     const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
     if (!d || (!d.title && !d.body)) return;
+    // 보관함의 어느 항목이었는지 이어받는다. 없으면(예전 버전 초안) 다음 저장 때 새로 붙는다.
+    if (d.id && history.find(histList, d.id)) currentId = d.id;
     $("postTitle").value = d.title || "";
     bodyEl().innerHTML = markBlanks(unmarkBlanks(d.body || ""));
     renderPlaceholders();
@@ -560,13 +666,18 @@ function restoreDraft() {
 }
 
 $("newPost").addEventListener("click", () => {
-  if (($("postTitle").value || bodyEl().textContent.trim()) && !confirm("제목과 글을 모두 비웁니다. 계속할까요?")) return;
+  if (($("postTitle").value || bodyEl().textContent.trim()) &&
+      !confirm("지금 글을 비우고 새로 시작합니다. 쓰던 글은 [지난 글]에 보관됩니다. 계속할까요?")) return;
+  // 비우기 전에 보관한다. 예전에는 그냥 사라졌다.
+  archiveNow();
+  currentId = null;
   $("postTitle").value = "";
   bodyEl().innerHTML = "";
   try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
   afterBodyChange();
   $("checkList").innerHTML = "";
-  say($("topStatus"), "새로 시작합니다.", "ok");
+  renderHistory();
+  say($("topStatus"), "새로 시작합니다. 쓰던 글은 [지난 글]에 있습니다.", "ok");
 });
 
 $("postTitle").addEventListener("input", () => {
@@ -576,5 +687,8 @@ $("postTitle").addEventListener("input", () => {
 
 // ────────────────────────── 시작 ──────────────────────────
 fillSettingsForm();
+// 보관함을 먼저 읽는다. restoreDraft 가 "쓰던 글이 보관함의 어느 항목인지" 를 여기서 찾는다.
+histList = history.load();
 restoreDraft();
+renderHistory();
 renderPlaceholders();

@@ -7,12 +7,27 @@
 # 사용: powershell -ExecutionPolicy Bypass -File dev-serve.ps1
 
 $root = Join-Path $PSScriptRoot 'docs'
-$prefix = 'http://localhost:8765/'
+$port = 8765
 
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add($prefix)
-$listener.Start()
-Write-Output "docs/ 를 $prefix 에서 서빙합니다. (Ctrl+C 로 종료)"
+# localhost 하나만 등록하면 브라우저가 127.0.0.1 로 붙을 때 HTTP.sys 가 400 을 준다
+# (Host 헤더가 안 맞는다). 실제로 "로컬에 안 띄워졌어" 의 원인이었다.
+# '+' 는 관리자 권한이 필요하므로, 흔히 쓰는 주소를 각각 등록한다.
+foreach ($h in 'localhost', '127.0.0.1', '[::1]') {
+  $listener.Prefixes.Add("http://${h}:$port/")
+}
+
+try {
+  $listener.Start()
+} catch {
+  Write-Output "서버를 띄우지 못했습니다: $($_.Exception.Message)"
+  Write-Output "같은 포트를 이미 쓰고 있는지 확인하세요: netstat -ano | findstr $port"
+  exit 1
+}
+
+Write-Output "준비됐습니다. 브라우저에서 아래 주소를 여세요. (Ctrl+C 로 종료)"
+Write-Output "  http://localhost:$port/"
+Write-Output "  자체 검증: http://localhost:$port/dev/selftest.html"
 
 $types = @{
   '.html' = 'text/html; charset=utf-8'

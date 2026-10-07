@@ -5,10 +5,13 @@
 
 const PENDING = "pendingPost";
 
+// 글쓰기 주소. /manage/post 는 /manage/newpost/?type=post 로 리다이렉트되므로
+// 처음부터 최종 주소로 연다(리다이렉트 중에 content script 가 두 번 돌지 않게).
+// /manage/post/write 는 폐기된 경로다. 쓰지 않는다.
 function writeUrl(blogUrl) {
   const host = String(blogUrl || "").trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   if (!host) return "";
-  return `https://${host}/manage/newpost/`;
+  return `https://${host}/manage/newpost/?type=post`;
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -31,9 +34,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const p = data?.[PENDING];
       const fresh = p && Date.now() - (p.at || 0) < 30 * 60 * 1000;
       // 한 번 가져가면 지운다. 새로고침할 때마다 다시 채워지면 곤란하다.
+      // 단 편집기를 못 찾았을 때는 tistory.js 가 KEEP_PENDING 으로 되돌려 놓는다
+      // (그래야 사용자가 새로고침해서 다시 시도할 수 있다).
       if (p) chrome.storage.local.remove(PENDING);
       sendResponse(fresh ? { post: p } : { post: null });
     });
+    return true;
+  }
+
+  // 채우기에 실패했으면 글을 다시 넣어 둔다. 한 번 실패로 글이 사라지면 안 된다.
+  if (msg?.type === "KEEP_PENDING" && msg.post) {
+    chrome.storage.local.set({ [PENDING]: { ...msg.post, at: msg.post.at || Date.now() } }, () =>
+      sendResponse({ ok: true }));
     return true;
   }
 

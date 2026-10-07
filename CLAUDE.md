@@ -131,6 +131,7 @@ docs/js/checks.js     발행 전 완성도 점검 (순수 함수 — selftest �
 docs/js/editor.js     빈칸 칠하기/벗기기 (화면 표시용)
 docs/js/markdown.js   마크다운 → HTML, 첫 줄 "# 제목" 분리, esc/escAttr
 docs/js/store.js      설정 저장 (localStorage). 키는 소스에 없다
+docs/js/history.js    지난 글 보관함. 순수 로직 + 저장소 주입(selftest 로 검증)
 dev-serve.ps1         docs/ 를 localhost:8765 로 띄우는 개발용 서버
 ```
 **외부 의존성 0.** 순수 JS, 빌드 도구 없음, ES 모듈.
@@ -189,11 +190,14 @@ dev-serve.ps1         docs/ 를 localhost:8765 로 띄우는 개발용 서버
 - [x] **3. 올리기 전 확인** — 5항목 판정. 무엇이 몇 개 남았는지 이름으로 보여준다
 - [x] **4. 미리보기 / 게시하기** — 발행 모습 미리보기, 복사 + 티스토리 글쓰기 창 열기
 - [x] **5. 썸네일 탭** — 자체 키워드 + 그림 풍(실사/그림/애니메이션) → 내려받기
-- [ ] **6. 생성 이력** — 만든 글 목록 보관, 다시 불러오기
+- [x] **6. 생성 이력** — 만든 글 목록 보관, 다시 불러오기 (2026-10-06)
 
-**검증 상태(2026-08-19)**
-- `dev/selftest.html` **100건 통과** — 프롬프트의 두 모드 규칙, 버튼 사양, 확인 항목,
-  429 구분까지 검사한다
+**검증 상태(2026-10-06)**
+- `dev/selftest.html` **147건 통과** — 프롬프트의 두 모드 규칙, 버튼 사양, 확인 항목,
+  429 구분, 보관함 로직까지 검사한다
+- 보관함(지난 글) 브라우저 동작 확인 — 자동 보관, 같은 글 갱신(중복 안 쌓임),
+  [새로 쓰기]·[글 만들기] 전에 보관, 불러오기, 새로고침 후 유지, 개별/전체 삭제.
+  **보관본에 노란 칠(`<mark class="blank">`)이 섞이지 않는 것까지 확인**(7장 함정)
 - 실제 키로 완성본 생성 확인(2,040자, 채울 표시 0개, 버튼 자리 2개, 확인 통과)
 - 버튼 자리 인식 → 변환 → 고지 자동 추가 → 확인까지 브라우저에서 확인
 - 미리보기·탭 전환·빈칸 클릭 선택 동작 확인
@@ -216,13 +220,44 @@ Blogger 편집기에 패널을 주입하던 v0.2~P2 버전. 사용 중단했다.
 글쓰기 **화면을 직접 조작**하는 크롬 확장을 만들었다.
 
 ```
-extension/manifest.json   MV3
-extension/bridge.js       웹앱 ↔ 확장 연결. window.postMessage 를 받아 전달한다.
-                          확장 ID 를 웹앱이 몰라도 되게 하려는 것(개발자 모드는 ID 가 바뀐다).
-                          document_start 에 dataset.gapExtension 을 찍어 설치 여부를 알린다.
-extension/background.js   글을 storage 에 잠깐 두고 글쓰기 탭을 연다. 30분 지나면 버린다.
-extension/tistory.js      제목·본문 칸을 찾아 채운다.
+extension/manifest.json     MV3
+extension/bridge.js         웹앱 ↔ 확장 연결. window.postMessage 를 받아 전달한다.
+                            확장 ID 를 웹앱이 몰라도 되게 하려는 것(개발자 모드는 ID 가 바뀐다).
+                            document_start 에 dataset.gapExtension 을 찍어 설치 여부를 알린다.
+extension/background.js     글을 storage 에 잠깐 두고 글쓰기 탭을 연다. 30분 지나면 버린다.
+                            실패 시 tistory.js 가 KEEP_PENDING 으로 글을 되돌려 둔다.
+extension/tistory.js        제목·본문 칸을 찾아 채운다 (격리된 세계).
+extension/tistory-main.js   페이지와 같은 세계("world":"MAIN")에서 TinyMCE 를 만진다.
+                            격리된 세계에서는 window.tinymce 에 닿지 못해서 따로 있다.
+                            둘은 CustomEvent(gap-main-req/res)로만 이야기한다.
 ```
+
+### 티스토리 글쓰기 화면 구조 (2026-10 조사, 복수 구현의 실측 보고 기준)
+- 주소: `https://{블로그}.tistory.com/manage/newpost/?type=post`
+  (`/manage/post` 는 여기로 리다이렉트된다. `/manage/post/write` 는 폐기된 경로)
+- 에디터 스택: KEditor + **TinyMCE** + CodeMirror 5
+- 제목: `textarea#post-title-inp` (`class="textarea_tit"`) — **input 이 아니라 textarea 다**
+- 작성 모드 3개 — 본문 컨테이너가 전부 다르다
+  - 기본(카카오): `iframe#editor-tistory_ifr` 안쪽 ← **이 경로만 쓴다**
+  - 마크다운: `.cm-s-tistory-markdown` (CodeMirror)
+  - HTML: `.cm-s-tistory-html` (CodeMirror)
+- 모드 전환: `#editor-mode-layer-btn-open` → `#editor-mode-kakao` / `-markdown` / `-html`
+- 발행: `#publish-layer-btn`("완료") → 레이어 안의 `#publish-btn`. **기본값이 비공개다.**
+
+### ⚠ 조용히 실패하는 함정 — 이것 때문에 설계를 바꿨다
+1. **`setContent()` 만 하면 빈 글이 발행된다.** 티스토리가 서버로 보내는 값은 화면의
+   편집기가 아니라 숨은 `textarea#editor-tistory` 다. `setContent()` 는 TinyMCE 내부만
+   바꾸고 이 칸을 비워 둔다. 그래서 **`save()`(+`triggerSave()`)로 동기화하고, 그 칸의
+   글자 수가 0 이면 실패로 보고**한다. `dev/fake-tinymce.html` 이 이 함정을 재현해서
+   검증한다(첫 항목이 "setContent 만 하면 제출값이 비어 있다").
+2. **CodeMirror(마크다운/HTML 모드)는 `setValue()` 가 React state 에 반영되지 않아**
+   역시 빈 글이 나간다. 그래서 그 두 모드는 **채우지 않고** 기본모드로 바꾸라고 안내한다.
+   한 외부 프로젝트는 이 문제로 UI 자동화를 포기하고 내부 API 호출로 갔다.
+3. **마크다운/HTML CodeMirror 는 둘 다 미리 마운트되어 display 로만 토글된다.**
+   `.CodeMirror` 를 그냥 잡으면 안 보이는 쪽을 잡는다 — `display:none` 을 걸러야 한다.
+4. **진입 시 confirm 이 뜬다**("저장된 글이 있습니다. 이어서 작성하시겠습니까?").
+   처리하지 않으면 채우기가 멈춘다. content script 는 이 창을 직접 못 막으므로 안내만 한다.
+5. `load`/`networkidle` 이벤트가 **영영 안 뜬다**(상시 폴링). 폴링으로 기다려야 한다.
 
 **설계 원칙**
 - 선택자를 하나로 못 박지 않는다. contenteditable / iframe 안쪽 / placeholder 힌트 등
@@ -240,9 +275,18 @@ extension/tistory.js      제목·본문 칸을 찾아 채운다.
 확장으로 시작했다가 "계속 깨진다"는 이유로 웹앱으로 갈아탄 이력이 있다(13장). 같은 위험을
 안고 다시 만든 것이므로, 깨졌을 때 고칠 수 있게 위 원칙(특히 실패를 드러내는 것)을 지킬 것.
 
-⚠ **아직 실제 티스토리 글쓰기 화면에서 검증하지 못했다.** 개발 시점에 브라우저가
-티스토리에 로그인돼 있지 않아 편집기 DOM 을 볼 수 없었다. 문법과 웹앱 쪽 연동만 확인했다.
-로그인된 상태에서 한 번 돌려 보고 선택자를 다듬을 것.
+⚠ **아직 실제 티스토리 글쓰기 화면에서 검증하지 못했다.** 로그인이 필요해서다.
+대신 로그인 없이 할 수 있는 것은 해 두었다 —
+- `dev/fake-tistory.html` (18건) — 제목·본문 **찾기** 로직. 편집기가 취할 수 있는 다섯
+  모양(id 있음/placeholder 힌트만/제목이 textarea/본문이 iframe/방해물 섞임)에서 올바른
+  칸을 고르는지. 숨은 편집기와 작은 검색칸을 고르지 않는 것까지 본다.
+- `dev/fake-tinymce.html` (14건) — 진짜 TinyMCE 를 띄워 **저장 검증** 로직. 위 함정 1을
+  재현하고, 빈 본문을 실패로 잡아내는지, 버튼의 인라인 style 이 제출값에 살아남는지 본다.
+
+**남은 것은 선택자가 실제와 맞는지다.** 위 구조는 외부 구현들의 보고를 모은 것이고
+직접 눈으로 본 것이 아니다. 로그인한 상태에서 한 번 돌려 보고 다듬을 것.
+⚠ 참고: **Chrome 안정판은 `--load-extension` 을 거부한다.** 확장 로드는 사람이
+`chrome://extensions` 에서 개발자 모드로 해야 한다 — 자동화로 대신할 수 없다.
 
 ## 15. 내일 할 일 (2026-08-20 시작점)
 
@@ -269,7 +313,8 @@ extension/tistory.js      제목·본문 칸을 찾아 채운다.
 5. 마지막 발행 클릭을 자동으로 할지 사용자에게 확인한다(지금은 사람이 누르게 두었다)
 
 ### C. 그 다음 (기능)
-- **생성 이력** (11장 6번) — 만든 글 목록 보관, 다시 불러오기. 지금은 초안 하나만 남는다.
+- ~~생성 이력~~ — 2026-10-06 완료. `docs/js/history.js` + 왼쪽 패널 "4. 지난 글".
+  최대 50개까지 쌓고 오래된 것부터 버린다. 저장 공간이 차면 절반으로 줄여 다시 시도한다.
 - 썸네일 비율/크기 선택
 - 글 여러 개를 한 번에 만들기
 

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>fake-tinymce — 저장 검증 로직 확인</title>
+<style>
+  body{font:14px/1.6 ui-monospace,Consolas,monospace;padding:18px;max-width:1000px;margin:0 auto;background:#f7f8fa}
+  h1{font-size:17px}
+  .pass{color:#2f855a}.fail{color:#c53030;font-weight:700}
+  #summary{font-size:16px;font-weight:700;margin:12px 0}
+  #out{list-style:none;padding:0}#out li{margin:2px 0;white-space:pre-wrap}
+  .stage{border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:12px;margin:10px 0}
+  textarea.textarea_tit{width:620px;padding:7px;border:1px solid #cbd5e0;border-radius:6px;font:inherit}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tinymce/7.3.0/tinymce.min.js"></script>
+</head>
+<body>
+<h1>fake-tinymce — 저장 검증 로직 확인</h1>
+<p>티스토리 로그인 없이 <b>"setContent 만 하면 빈 글이 발행된다"</b> 는 함정과,
+<code>tistory-main.js</code> 의 <b>save() + 길이 검증</b>이 그것을 잡아내는지 확인합니다.
+<br>진짜 TinyMCE 를 띄워, 티스토리처럼 <b>숨은 <code>textarea#editor-tistory</code></b> 를 제출값으로 둡니다.
+<br>⚠ 실제 티스토리의 React state 문제까지 재현하지는 못합니다. 그건 로그인 후 확인해야 합니다.</p>
+
+<div id="summary">실행 중…</div>
+<ul id="out"></ul>
+
+<div class="stage">
+  <h2 style="font-size:13px;margin:0 0 8px;color:#553c9a">가짜 티스토리 글쓰기 화면</h2>
+  <textarea id="post-title-inp" class="textarea_tit" rows="1" placeholder="제목을 입력하세요"></textarea>
+  <!-- 티스토리와 같은 구조: TinyMCE 가 이 textarea 를 감싸고, 제출되는 값은 이 textarea 다. -->
+  <textarea id="editor-tistory"></textarea>
+</div>
+
+<script>
+const out = document.getElementById("out");
+let pass = 0, fail = 0;
+function check(name, actual, expected) {
+  const ok = actual === expected;
+  ok ? pass++ : fail++;
+  const li = document.createElement("li");
+  li.className = ok ? "pass" : "fail";
+  li.textContent = (ok ? "PASS  " : "FAIL  ") + name + (ok ? "" : `\n      기대: ${expected}\n      실제: ${actual}`);
+  out.appendChild(li);
+}
+function finish() {
+  const sum = document.getElementById("summary");
+  sum.textContent = `${pass} PASS / ${fail} FAIL`;
+  sum.className = fail ? "fail" : "pass";
+  console.log(`[fake-tinymce] ${pass} pass, ${fail} fail`);
+}
+
+// tistory-main.js 의 핵심 로직을 그대로 옮겨 온 것.
+// ⚠ tistory-main.js 를 고치면 여기도 같이 고쳐야 한다.
+const submittedLength = () => {
+  const ta = document.getElementById("editor-tistory");
+  return ta ? String(ta.value || "").length : -1;
+};
+function editor() {
+  const tm = window.tinymce;
+  if (!tm) return null;
+  return tm.get("editor-tistory") || tm.activeEditor || null;
+}
+function syncToTextarea(ed) {
+  const tm = window.tinymce;
+  try { if (ed && typeof ed.save === "function") ed.save(); } catch (e) {}
+  try { if (tm && typeof tm.triggerSave === "function") tm.triggerSave(); } catch (e) {}
+}
+function setBody(html) {
+  const ed = editor();
+  if (!ed) return { ok: false, reason: "TinyMCE 편집기를 찾지 못했습니다", submitted: submittedLength() };
+  ed.setContent(String(html || ""));
+  syncToTextarea(ed);
+  try { ed.fire("change"); } catch (e) {}
+  const len = submittedLength();
+  return { ok: len > 0, reason: len === 0 ? "넣었지만 저장될 값이 비어 있습니다" : "", submitted: len };
+}
+function setTitle(el, text) {
+  if (!el) return false;
+  const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement : HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
+  el.focus();
+  if (setter) setter.call(el, text); else el.value = text;
+  for (const t of ["input", "change", "keyup", "blur"]) el.dispatchEvent(new Event(t, { bubbles: true }));
+  return String(el.value || "") === String(text);
+}
+
+if (!window.tinymce) {
+  check("TinyMCE 를 불러왔다", false, true);
+  finish();
+} else {
+  tinymce.init({
+    selector: "#editor-tistory",
+    height: 160,
+    menubar: false,
+    statusbar: false,
+    license_key: "gpl",
+    setup(ed) {
+      ed.on("init", () => {
+        // ── 함정 재현: setContent 만 하면 제출 textarea 가 비어 있다 ──
+        ed.setContent("<p>처음 넣은 본문</p>");
+        check("setContent 만 하면 제출값이 비어 있다(함정 재현)", submittedLength(), 0);
+
+        // ── save() 를 하면 채워진다 ──
+        ed.save();
+        const afterSave = submittedLength();
+        check("save() 뒤에는 제출값이 채워진다", afterSave > 0, true);
+
+        // ── 우리 로직이 정상 경로를 통과시키는가 ──
+        const html = '<p>본문이다</p><div style="text-align:center"><a href="https://x.com">버튼</a></div>';
+        const r = setBody(html);
+        check("setBody 가 성공으로 보고한다", r.ok, true);
+        check("제출값 길이를 돌려준다", r.submitted > 0, true);
+        check("실패 사유는 비어 있다", r.reason, "");
+        check("버튼 HTML 이 제출값에 살아 있다", /x\.com/.test(document.getElementById("editor-tistory").value), true);
+        check("인라인 style 이 제출값에 살아 있다", /text-align/.test(document.getElementById("editor-tistory").value), true);
+
+        // ── 빈 본문을 넣으면 실패로 잡아내는가 (가장 중요) ──
+        const empty = setBody("");
+        check("빈 본문은 실패로 잡아낸다", empty.ok, false);
+        check("빈 본문의 사유를 알려준다", empty.reason, "넣었지만 저장될 값이 비어 있습니다");
+
+        // ── 제목(textarea) 넣기 ──
+        const t = document.getElementById("post-title-inp");
+        let sawInput = false;
+        t.addEventListener("input", () => { sawInput = true; });
+        const okT = setTitle(t, "넣은 제목");
+        check("textarea 제목이 들어간다", t.value, "넣은 제목");
+        check("setTitle 이 성공을 돌려준다", okT, true);
+        check("input 이벤트가 발생한다", sawInput, true);
+
+        // ── 편집기가 없을 때 ──
+        const saved = window.tinymce;
+        window.tinymce = undefined;
+        const noEd = setBody("<p>x</p>");
+        check("TinyMCE 가 없으면 실패로 보고한다", noEd.ok, false);
+        check("없을 때 사유를 알려준다", noEd.reason, "TinyMCE 편집기를 찾지 못했습니다");
+        window.tinymce = saved;
+
+        finish();
+      });
+    },
+  });
+}
+</script>
+</body>
+</html>

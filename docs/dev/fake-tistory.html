@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>fake-tistory — 편집기 찾기 검증</title>
+<style>
+  body{font:14px/1.6 ui-monospace,Consolas,monospace;padding:18px;max-width:1000px;margin:0 auto;background:#f7f8fa}
+  h1{font-size:17px}
+  .pass{color:#2f855a}.fail{color:#c53030;font-weight:700}
+  #summary{font-size:16px;font-weight:700;margin:12px 0}
+  #out{list-style:none;padding:0}#out li{margin:2px 0;white-space:pre-wrap}
+  .stage{border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:12px;margin:10px 0}
+  .stage h2{font-size:13px;margin:0 0 8px;color:#553c9a}
+  .ed{border:1px solid #cbd5e0;border-radius:6px;padding:8px;min-height:90px;width:620px}
+  input,textarea{width:620px;padding:7px;border:1px solid #cbd5e0;border-radius:6px;font:inherit}
+  iframe{width:640px;height:120px;border:1px solid #cbd5e0;border-radius:6px}
+</style>
+</head>
+<body>
+<h1>fake-tistory — 편집기 찾기 검증</h1>
+<p>티스토리 로그인 없이 <code>tistory.js</code> 의 <b>제목·본문 칸 찾기</b> 로직을 검증합니다.
+실제 티스토리 편집기가 취할 수 있는 여러 모양을 흉내 내어, 각 모양에서 올바른 칸을 고르는지 봅니다.
+<br>⚠ 이것은 <b>찾기 로직</b> 검증입니다. 실제 티스토리에서의 동작은 로그인 후 확인해야 합니다.</p>
+
+<div id="summary">실행 중…</div>
+<ul id="out"></ul>
+
+<!-- ── 무대 1: contenteditable div (TinyMCE 류) ── -->
+<div class="stage" id="stage-ce">
+  <h2>무대 1 — contenteditable div</h2>
+  <input id="post-title-inp" type="text" placeholder="제목을 입력하세요">
+  <div class="ed" contenteditable="true" id="ce-body">본문</div>
+</div>
+
+<!-- ── 무대 2: id 없는 제목 + placeholder 힌트만 ── -->
+<div class="stage" id="stage-hint">
+  <h2>무대 2 — id 없음, placeholder 힌트만</h2>
+  <input class="t2" type="text" placeholder="제목을 입력해 주세요">
+  <div class="ed" contenteditable="true" class="b2">본문</div>
+</div>
+
+<!-- ── 무대 3: 제목이 textarea (티스토리가 바꾼 경우) ── -->
+<div class="stage" id="stage-ta">
+  <h2>무대 3 — 제목이 textarea</h2>
+  <textarea class="t3" rows="1" placeholder="제목"></textarea>
+  <div class="ed" contenteditable="true">본문</div>
+</div>
+
+<!-- ── 무대 4: 본문이 iframe 안 ── -->
+<div class="stage" id="stage-if">
+  <h2>무대 4 — 본문이 iframe 안쪽</h2>
+  <input class="t4" type="text" placeholder="제목을 입력하세요">
+  <iframe id="if-body"></iframe>
+</div>
+
+<!-- ── 무대 5: 가짜 칸이 섞여 있음(작은 입력칸, 숨은 편집기) ── -->
+<div class="stage" id="stage-noise">
+  <h2>무대 5 — 방해물 섞임 (검색칸 / 숨은 편집기 / 큰 본문)</h2>
+  <input class="noise" type="text" placeholder="검색" style="width:90px">
+  <div contenteditable="true" style="display:none">숨은 편집기</div>
+  <input class="t5" type="text" placeholder="제목을 입력하세요">
+  <div class="ed" contenteditable="true" style="min-height:160px">진짜 본문</div>
+</div>
+
+<script>
+// tistory.js 의 찾기 로직을 그대로 옮겨 온 것.
+// ⚠ tistory.js 를 고치면 여기도 같이 고쳐야 한다. 확장 스크립트는 chrome.* 를 쓰므로
+//    페이지에서 그대로 import 할 수 없어 불가피하게 복제했다.
+const visible = (n) => {
+  const r = n.getBoundingClientRect();
+  return r.width > 80 && r.height > 20;
+};
+
+function findTitle(root) {
+  const byId = root.querySelector("#post-title-inp, input[name='title'], input#title");
+  if (byId) return byId;
+  const inputs = [...root.querySelectorAll("input[type='text'], input:not([type]), textarea")].filter(visible);
+  const hinted = inputs.find((i) =>
+    /제목|title/i.test(`${i.placeholder || ""} ${i.getAttribute("aria-label") || ""} ${i.name || ""}`));
+  if (hinted) return hinted;
+  return inputs.find((i) => i.tagName === "INPUT" && i.getBoundingClientRect().top < 400) || null;
+}
+
+function findBodyIn(root) {
+  const pick = (doc) =>
+    [...doc.querySelectorAll("[contenteditable='true'], [contenteditable='']")]
+      .filter(visible)
+      .sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0] || null;
+  const direct = pick(root);
+  if (direct) return { el: direct, where: "본문(직접)" };
+  for (const f of root.querySelectorAll("iframe")) {
+    let d;
+    try { d = f.contentDocument; } catch (_) { continue; }
+    if (!d) continue;
+    const inner = pick(d);
+    if (inner) return { el: inner, where: "본문(iframe)" };
+    if (d.body && d.body.isContentEditable) return { el: d.body, where: "본문(iframe body)" };
+  }
+  return null;
+}
+
+const out = document.getElementById("out");
+let pass = 0, fail = 0;
+function check(name, actual, expected) {
+  const ok = actual === expected;
+  ok ? pass++ : fail++;
+  const li = document.createElement("li");
+  li.className = ok ? "pass" : "fail";
+  li.textContent = (ok ? "PASS  " : "FAIL  ") + name + (ok ? "" : `\n      기대: ${expected}\n      실제: ${actual}`);
+  out.appendChild(li);
+}
+
+// iframe 안쪽에 편집기를 만들어 둔다.
+const ifr = document.getElementById("if-body");
+ifr.srcdoc = `<body><div contenteditable="true" style="min-height:90px;border:1px solid #ccc">iframe 본문</div></body>`;
+
+window.addEventListener("load", () => setTimeout(() => {
+  // ── 무대 1 ──
+  const s1 = document.getElementById("stage-ce");
+  check("1. id 로 제목을 찾는다", findTitle(s1)?.id, "post-title-inp");
+  check("1. 본문을 찾는다", findBodyIn(s1)?.el?.id, "ce-body");
+  check("1. 본문 위치는 직접", findBodyIn(s1)?.where, "본문(직접)");
+
+  // ── 무대 2 ──
+  const s2 = document.getElementById("stage-hint");
+  check("2. placeholder 힌트로 제목", findTitle(s2)?.className, "t2");
+  check("2. 본문을 찾는다", !!findBodyIn(s2)?.el, true);
+
+  // ── 무대 3 ──
+  const s3 = document.getElementById("stage-ta");
+  const t3 = findTitle(s3);
+  check("3. textarea 제목도 찾는다", t3?.className, "t3");
+  check("3. 태그는 TEXTAREA", t3?.tagName, "TEXTAREA");
+
+  // ── 무대 4 ──
+  const s4 = document.getElementById("stage-if");
+  check("4. 제목은 본문 iframe 과 별개", findTitle(s4)?.className, "t4");
+  const b4 = findBodyIn(s4);
+  check("4. iframe 안 본문을 찾는다", b4?.where, "본문(iframe)");
+  check("4. iframe 본문 내용 확인", (b4?.el?.textContent || "").trim(), "iframe 본문");
+
+  // ── 무대 5 ──
+  const s5 = document.getElementById("stage-noise");
+  check("5. 작은 검색칸을 제목으로 고르지 않는다", findTitle(s5)?.className, "t5");
+  const b5 = findBodyIn(s5);
+  check("5. 숨은 편집기를 고르지 않는다", (b5?.el?.textContent || "").trim(), "진짜 본문");
+  check("5. 가장 큰 편집기를 고른다", b5?.el?.style?.minHeight, "160px");
+
+  // ── 제목 넣기(네이티브 setter) 가 먹는지 ──
+  function setTitle(el, text) {
+    if (!el) return false;
+    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement : HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
+    el.focus();
+    if (setter) setter.call(el, text); else el.value = text;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+  const ti = document.getElementById("post-title-inp");
+  let sawInput = false;
+  ti.addEventListener("input", () => { sawInput = true; });
+  setTitle(ti, "넣은 제목");
+  check("제목이 들어간다", ti.value, "넣은 제목");
+  check("input 이벤트가 발생한다", sawInput, true);
+  const ta = document.querySelector(".t3");
+  setTitle(ta, "textarea 제목");
+  check("textarea 제목도 들어간다", ta.value, "textarea 제목");
+
+  // ── 본문 넣기 ──
+  const target = document.getElementById("ce-body");
+  target.focus();
+  const sel = document.getSelection(), range = document.createRange();
+  range.selectNodeContents(target);
+  sel.removeAllRanges(); sel.addRange(range);
+  let how = "innerHTML";
+  try { if (document.execCommand("insertHTML", false, "<p>넣은 본문</p>")) how = "insertHTML"; } catch (_) {}
+  if (how === "innerHTML") target.innerHTML = "<p>넣은 본문</p>";
+  check("본문이 들어간다", /넣은 본문/.test(target.innerHTML), true);
+  check("본문 넣기 방식", how, "insertHTML");
+
+  const sum = document.getElementById("summary");
+  sum.textContent = `${pass} PASS / ${fail} FAIL`;
+  sum.className = fail ? "fail" : "pass";
+  console.log(`[fake-tistory] ${pass} pass, ${fail} fail`);
+}, 300));
+</script>
+</body>
+</html>

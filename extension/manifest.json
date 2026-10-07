@@ -16,6 +16,12 @@
       "matches": ["*://*.tistory.com/manage/newpost*"],
       "js": ["tistory.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.tistory.com/manage/newpost*"],
+      "js": ["tistory-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
     }
   ]
 }

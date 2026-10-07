@@ -24,6 +24,7 @@ import { TEXT_MODELS, TEXT_MODEL_DEFAULT, TOPIC_TONES, THUMB_STYLES, BLANKS, BUT
 import * as buttons from "../js/buttons.js";
 import * as checks from "../js/checks.js";
 import { markBlanks, unmarkBlanks } from "../js/editor.js";
+import * as history from "../js/history.js";
 
 const out = document.getElementById("out");
 let pass = 0, fail = 0;
@@ -205,6 +206,96 @@ check("칠을 벗기면 원래대로", unmarkBlanks(markBlanks("<p>[내 경험]<
 check("두 번 칠해도 한 겹", (markBlanks(markBlanks("<p>[내 경험]</p>")).match(/mark class/g)||[]).length, 1);
 check("칠한 뒤에도 빈칸 개수는 그대로", checks.countBlanks(markBlanks("<p>[내 경험] [내 의견]</p>")), 2);
 check("일반 글자는 안 건드린다", markBlanks("<p>그냥 글</p>"), "<p>그냥 글</p>");
+
+// ── 지난 글 보관함 ──
+// 저장소를 인자로 받게 만들어 둔 덕분에 localStorage 를 건드리지 않고 검사할 수 있다.
+function fakeStore(initial) {
+  const m = new Map(initial ? [[history.HISTORY_KEY, initial]] : []);
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, v),
+    removeItem: (k) => m.delete(k),
+    _dump: () => m.get(history.HISTORY_KEY),
+  };
+}
+
+check("태그를 벗겨 글자만", history.plainText("<p>가나다</p>"), "가나다");
+check("문단 사이는 띄운다", history.plainText("<p>가</p><p>나</p>"), "가 나");
+check("br 도 띄운다", history.plainText("가<br>나"), "가 나");
+check("실체 참조를 되돌린다", history.plainText("<p>a&amp;b</p>"), "a&b");
+check("제목이 있으면 제목을 쓴다", history.makeLabel("내 제목", "본문"), "내 제목");
+check("제목이 없으면 본문 앞을", history.makeLabel("", "본문 첫 줄"), "본문 첫 줄");
+check("둘 다 없으면 제목 없음", history.makeLabel("", ""), "(제목 없음)");
+check("긴 제목 대체는 자른다", history.makeLabel("", "가".repeat(60)).length, 41);
+check("짧은 미리보기는 그대로", history.makeSnippet("짧다"), "짧다");
+check("긴 미리보기는 자른다", history.makeSnippet("가".repeat(200)).length, 91);
+
+const e1 = history.makeEntry({ title: "글 하나", body: "<p>가나다</p>" });
+check("항목에 id 가 붙는다", typeof e1.id, "string");
+check("항목이 글자 수를 센다", e1.chars, 3);
+check("항목에 이름이 붙는다", e1.label, "글 하나");
+check("id 를 주면 그대로 쓴다", history.makeEntry({ id: "keep", title: "t" }).id, "keep");
+
+const listA = history.upsert([], e1);
+check("넣으면 하나", listA.length, 1);
+const e1b = history.makeEntry({ id: e1.id, title: "고친 제목", body: "<p>가나다라</p>" });
+const listB = history.upsert(listA, e1b);
+check("같은 id 는 새로 쌓지 않는다", listB.length, 1);
+check("같은 id 는 내용이 갱신된다", listB[0].label, "고친 제목");
+const listC = history.upsert(listB, history.makeEntry({ title: "다른 글" }));
+check("다른 글은 따로 쌓인다", listC.length, 2);
+check("새 글이 맨 앞에 온다", listC[0].label, "다른 글");
+check("id 로 찾는다", history.find(listC, e1.id).label, "고친 제목");
+check("없는 id 는 null", history.find(listC, "nope"), null);
+check("id 로 지운다", history.remove(listC, e1.id).length, 1);
+
+// 상한을 넘기면 오래된 것부터 버린다.
+let big = [];
+for (let i = 0; i < history.MAX_ITEMS + 10; i++) big = history.upsert(big, history.makeEntry({ title: `글${i}` }));
+check("상한을 넘지 않는다", big.length, history.MAX_ITEMS);
+check("최근 글이 남는다", big[0].label, `글${history.MAX_ITEMS + 9}`);
+
+check("빈 글은 보관하지 않는다", history.worthSaving({ title: "", body: "" }), false);
+check("태그만 있는 본문도 빈 글", history.worthSaving({ title: "", body: "<p></p>" }), false);
+check("제목만 있어도 보관한다", history.worthSaving({ title: "제목", body: "" }), true);
+check("본문만 있어도 보관한다", history.worthSaving({ title: "", body: "<p>글</p>" }), true);
+
+check("깨진 저장값은 빈 목록", history.sanitize("아님").length, 0);
+check("id 없는 항목은 버린다", history.sanitize([{ title: "x" }]).length, 0);
+check("정상 항목은 살린다", history.sanitize([{ id: "a", title: "x", body: "<p>글</p>" }]).length, 1);
+check("빠진 글자 수는 다시 센다", history.sanitize([{ id: "a", body: "<p>가나다</p>" }])[0].chars, 3);
+
+// 저장소를 통한 왕복
+const st = fakeStore();
+const r1 = history.saveEntry({ title: "보관 시험", body: "<p>본문이다</p>" }, st);
+check("저장하면 항목이 돌아온다", r1.entry.label, "보관 시험");
+check("저장하면 목록에 들어간다", r1.list.length, 1);
+check("다시 읽으면 그대로", history.load(st)[0].label, "보관 시험");
+check("본문도 그대로", history.load(st)[0].body, "<p>본문이다</p>");
+const r2 = history.saveEntry({ id: r1.entry.id, title: "고쳤다", body: "<p>본문이다</p>" }, st);
+check("같은 id 로 저장하면 갱신", r2.list.length, 1);
+check("갱신된 제목이 보인다", history.load(st)[0].label, "고쳤다");
+check("빈 글은 저장되지 않는다", history.saveEntry({ title: "", body: "" }, st).entry, null);
+check("지우면 사라진다", history.removeEntry(r1.entry.id, st).length, 0);
+history.saveEntry({ title: "비울 것", body: "<p>글</p>" }, st);
+history.clearAll(st);
+check("비우면 빈 목록", history.load(st).length, 0);
+check("저장소가 없으면 빈 목록", history.load(null).length, 0);
+check("저장소가 없으면 저장은 실패", history.persist([], null), false);
+
+// 저장 공간이 찼을 때 — 절반으로 줄여 다시 시도한다.
+let throwTimes = 2;
+const tight = {
+  getItem: () => "[]",
+  setItem: () => { if (throwTimes-- > 0) throw new Error("quota"); },
+  removeItem: () => {},
+};
+check("공간이 모자라면 줄여서 저장한다", history.persist(big, tight), true);
+
+const t = new Date(2026, 9, 6, 14, 30).getTime();
+check("같은 날은 시각만", history.formatWhen(t, t), "14:30");
+check("다른 날은 날짜까지", history.formatWhen(t, new Date(2026, 9, 7).getTime()), "10/6 14:30");
+check("시각이 없으면 빈 문자", history.formatWhen(0), "");
 
 // ── 결과 ──
 const sum = document.getElementById("summary");

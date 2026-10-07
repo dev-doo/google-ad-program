@@ -89,6 +89,27 @@ button.tiny{padding:3px 10px;font-size:12px;color:var(--muted)}
 .checks li.ok{color:var(--ok)}
 .checks li.warn{color:var(--warn)}
 
+/* ── 지난 글 보관함 ── */
+.hist{list-style:none;margin:10px 0 0;padding:0}
+.hist li{
+  display:flex;align-items:flex-start;gap:6px;
+  border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;background:#fff;
+}
+.hist li.current{border-color:var(--brand);background:#faf5ff}
+/* 제목 칸이 넓어야 눌러서 불러오기 쉽다. min-width:0 이 없으면 긴 제목이 칸을 밀어낸다. */
+.hist .pick{
+  flex:1;min-width:0;text-align:left;border:none;background:none;padding:0;
+}
+.hist .pick:hover .t{color:var(--brand);text-decoration:underline}
+.hist .t{display:block;font-size:13px;font-weight:600;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist .s{display:block;font-size:11px;color:var(--muted);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist .m{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+.hist .del{padding:2px 7px;font-size:12px;color:var(--muted);line-height:1.2;flex:none}
+.hist .del:hover{color:var(--danger);border-color:var(--danger)}
+.hist .empty{display:block;border:none;background:none;padding:0;color:var(--muted);font-size:12px}
+
 /* 버튼 자리(플레이스홀더) 입력 */
 .ph{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0}
 .ph label{font-weight:700;color:var(--brand)}
