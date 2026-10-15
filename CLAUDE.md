@@ -16,10 +16,13 @@
 **게시 자동화는 만들 수 없다.** 티스토리 오픈 API는 2024년 2월에 완전 종료되었고
 글쓰기 API도 포함이다. 신규 발급도 불가능하다. 복사·붙여넣기가 유일한 경로다.
 
-- 앱: `https://dev-doo.github.io/google-ad-program/` (Pages: `master` 브랜치 `/docs`)
+- 앱: `https://doo-writer.pages.dev/` (Cloudflare Pages: `master` 브랜치 `/docs`, 푸시하면 자동 배포)
+  - **이메일 잠금(Cloudflare Access)이 걸려 있다.** 허락된 이메일로 확인 번호를 받아야 열린다. 16장 참고.
+  - 옛 주소 `https://dev-doo.github.io/google-ad-program/` 는 리포를 비공개로 돌리면 꺼진다.
 - 자체 검증: `.../dev/selftest.html` (키 없이 순수 로직)
 - 로컬: `powershell -ExecutionPolicy Bypass -File dev-serve.ps1` → `http://localhost:8765`
-- **리포는 공개다. 키를 코드에 넣지 말 것.**
+- **리포는 비공개로 돌릴 예정이다(2026-10-15 결정). 그래도 키를 코드에 넣지 말 것** — 앱에 들어온
+  사람은 누구나 코드를 열어 볼 수 있다. 키는 각자 설정에 넣는다.
 
 ### 실사용 흐름 (이게 반드시 동작해야 한다)
 1. 키워드 입력: "초기창업패키지 작성방법"
@@ -332,3 +335,23 @@ extension/tistory-main.js   페이지와 같은 세계("world":"MAIN")에서 Tin
   검증되지 않은 변경을 올리면 사용자가 쓰는 앱이 바로 바뀐다.
   확인이 끝난 것만 `master` 로 합친다.
 - 사용자는 개발자가 아니다. 화면 문구를 일상어로 쓰고, HTML 을 노출하지 않는다(7장).
+
+## 16. 호스팅과 이메일 잠금 (2026-10-15)
+사용자가 "공개로 두되 남이 못 보게" 하길 원했다. GitHub 무료 계정은 비공개 리포로 Pages 를
+못 열고, Pages 자체에 비밀번호 기능도 없다. 그래서 **Cloudflare Pages + Cloudflare Access** 로 옮겼다.
+
+- Cloudflare 계정: dooSW02@gmail.com. GitHub 앱 "Cloudflare Workers and Pages" 는
+  `dev-doo/google-ad-program` **한 리포에만** 권한을 줬다.
+- Pages 프로젝트 `doo-writer` — 빌드 명령 없음, 출력 폴더 `docs`, 운영 브랜치 `master`.
+  다른 브랜치는 `<브랜치>.doo-writer.pages.dev` 미리보기로 올라간다.
+- Access(Zero Trust Free, 50명까지 무료) 앱 두 개:
+  - `doo-writer.pages.dev` — 정책 `allowed-emails`(Emails 포함 규칙). **사람 추가·삭제는 여기서.**
+    Zero Trust → Access controls → Policies → allowed-emails
+  - `*.doo-writer.pages.dev` (미리보기) — Pages 설정의 "Restrict previews" 가 만든 것. 계정 주인만.
+- 로그인은 이메일 확인 번호(One-time PIN). 허락 안 된 주소에도 화면은 "보냈다"고 나오지만
+  실제 메일은 가지 않는다(누가 허락됐는지 숨기는 Cloudflare 의 동작).
+- 확인한 것: 잠금 후 바깥 접속이 로그인 화면으로 302, 허락된 Gmail 로 번호 받아 로그인 성공.
+- **localStorage 는 주소별이다.** 새 주소에서는 키·블로그 주소를 다시 넣어야 하고 지난 글은 옮겨지지 않는다.
+- 확장(`extension/manifest.json`)의 bridge 대상에 새 주소를 추가했다(0.1.1). 확장을 다시 불러와야 적용된다.
+- **남은 일:** GitHub 리포를 비공개로 전환(사용자 확인 후). 전환하면 github.io 주소는 꺼지고,
+  manifest 의 github.io 줄은 지워도 된다.

@@ -1,14 +1,19 @@
 {
   "manifest_version": 3,
   "name": "티스토리 글 도우미 — 자동 발행",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "글 도우미에서 만든 글을 티스토리 글쓰기 화면에 채워 넣습니다. 티스토리 오픈 API가 종료되어(2024-02) 이 방법밖에 없습니다.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["*://*.tistory.com/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": ["https://dev-doo.github.io/google-ad-program/*", "http://localhost:8765/*"],
+      "matches": [
+        "https://doo-writer.pages.dev/*",
+        "https://*.doo-writer.pages.dev/*",
+        "https://dev-doo.github.io/google-ad-program/*",
+        "http://localhost:8765/*"
+      ],
       "js": ["bridge.js"],
       "run_at": "document_start"
     },
